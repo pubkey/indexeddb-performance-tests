@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>IndexedDB performance tests</title>
+</head>
+
+<body>
+
+    <script src="bundle.js"></script>
+
+    <div class="test-case">
+        <h4>Create one Database per document store</h4>
+        <p>
+            When we want split our documents into multiple collections/tables/stores,
+            we can either create one IndexedDB database per store,
+            or put all stores into one IndexedDB database.
+            <br /><br />
+            A: Create one IndexedDB database with many stores<br />
+            B: Create one IndexedDB database <b>per</b> store<br />
+        </p>
+        <button
+            test-case-id="per-store"
+            onclick="window.testCasePerStore()"
+        >Measure</button>
+    </div>
+
+
+    <div class="test-case">
+        <h4>Sharding</h4>
+        <p>
+            Instead of storing all documents at the same IndexedDB store,
+            we can create multiple stores and distribute the documents among them.
+            This could lead to faster read times.
+            <br /><br />
+            A: Create one IndexedDB database with one store<br />
+            B: Create one IndexedDB database with many stores<br />
+            C: Create many IndexedDB databases with one store each.<br />
+        </p>
+        <button
+            test-case-id="per-store"
+            onclick="window.testCaseSharding()"
+        >Measure</button>
+    </div>
+
+
+
+</body>
+
+</html>
