@@ -2,8 +2,10 @@ import { randomString } from 'async-test-util';
 import {
     addStoresToExistingDatabase,
     deleteDatabase,
+    findDocumentsById,
     getAverageDocument,
     getShardKey,
+    halfArray,
     insertMany,
     openDatabase,
     readAll,
@@ -170,6 +172,54 @@ export async function testCaseSharding(): Promise<TestCase> {
                 })
             );
         },
+    };
+
+
+    /**
+     * Read documents by id
+     */
+    const halfDocIds: string[] = halfArray(testDocuments).map(d => d.id);
+    testCase['read-by-id'] = {
+        a: async () => {
+            return findDocumentsById(
+                dbA,
+                'documents',
+                halfDocIds
+            );
+        },
+        b: async () => {
+            return Promise.all(
+                storeNames.map(storeName => {
+                    return findDocumentsById(
+                        dbB,
+                        storeName,
+                        halfDocIds
+                    );
+                })
+            );
+        },
+        c: async () => {
+            return Promise.all(
+                dbsC.map(db => {
+                    return findDocumentsById(
+                        db,
+                        'documents',
+                        halfDocIds
+                    );
+                })
+            );
+        },
+        d: async () => {
+            await Promise.all(
+                storeNames.map(storeName => {
+                    return findDocumentsById(
+                        dbD,
+                        storeName,
+                        halfDocIds
+                    );
+                })
+            );
+        }
     };
 
 

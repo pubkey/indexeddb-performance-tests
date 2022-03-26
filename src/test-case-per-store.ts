@@ -2,10 +2,12 @@ import { randomString, wait } from 'async-test-util';
 import {
     addStoresToExistingDatabase,
     deleteDatabase,
+    findDocumentsById,
     getAverageDocument,
     halfArray,
     insertMany,
     openDatabase,
+    readAll,
     TestCase,
     TestDocument,
     TRANSACTION_SETTINGS
@@ -18,7 +20,7 @@ export async function testCasePerStore(): Promise<TestCase> {
      * 10 stores is about the average use case.
      */
     const storeAmount = 10;
-    const documentsPerStore = 100;
+    const documentsPerStore = 1000;
 
     const storeNames = new Array(storeAmount)
         .fill(0)
@@ -109,17 +111,10 @@ export async function testCasePerStore(): Promise<TestCase> {
         a: async () => {
             await Promise.all(
                 storeNames.map(storeName => {
-                    const tx: IDBTransaction = (dbA as any)
-                        .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
-                    const innerStore = tx.objectStore(storeName);
-                    return new Promise<any>(res => {
-                        innerStore.getAll().onsuccess = function (event) {
-                            res((event as any).target.result);
-                        };
-                        if ((tx as any).commit) {
-                            (tx as any).commit();
-                        }
-                    });
+                    return readAll(
+                        dbA,
+                        storeName
+                    );
                 })
             );
         },
@@ -139,31 +134,31 @@ export async function testCasePerStore(): Promise<TestCase> {
                     });
                 })
             );
-        }
+        },
+        c: async () => {
+            await Promise.all(
+                storeNames.map(storeName => {
+                    return readAll(
+                        dbC,
+                        storeName
+                    );
+                })
+            );
+        },
     };
 
     /**
      * Read documents by id
      */
-    const halfDocs = halfArray(testDocuments);
+    const halfDocIds: string[] = halfArray(testDocuments).map(d => d.id);
     testCase['read-by-id'] = {
         a: async () => {
             await Promise.all(
                 storeNames.map(storeName => {
-                    const tx: IDBTransaction = (dbA as any)
-                        .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
-                    const innerStore = tx.objectStore(storeName);
-
-                    return Promise.all(
-                        halfDocs.map(doc => {
-                            const docId = doc.id;
-                            return new Promise<any>(res => {
-                                const objectStoreRequest = innerStore.get(docId);
-                                objectStoreRequest.onsuccess = function (event) {
-                                    res({});
-                                };
-                            });
-                        })
+                    return findDocumentsById(
+                        dbA,
+                        storeName,
+                        halfDocIds
                     );
                 })
             );
@@ -171,23 +166,25 @@ export async function testCasePerStore(): Promise<TestCase> {
         b: async () => {
             await Promise.all(
                 dbsB.map(db => {
-                    const tx: IDBTransaction = (db as any)
-                        .transaction(['documents'], 'readonly', TRANSACTION_SETTINGS);
-                    const innerStore = tx.objectStore('documents');
-                    return Promise.all(
-                        halfDocs.map(doc => {
-                            const docId = doc.id;
-                            return new Promise<any>(res => {
-                                const objectStoreRequest = innerStore.get(docId);
-                                objectStoreRequest.onsuccess = function (event) {
-                                    res({});
-                                };
-                            });
-                        })
+                    return findDocumentsById(
+                        db,
+                        'documents',
+                        halfDocIds
                     );
                 })
             );
-        }
+        },
+        c: async () => {
+            await Promise.all(
+                storeNames.map(storeName => {
+                    return findDocumentsById(
+                        dbC,
+                        storeName,
+                        halfDocIds
+                    );
+                })
+            );
+        },
     };
 
     testCase['cleanup'] = {

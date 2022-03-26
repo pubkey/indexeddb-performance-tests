@@ -351,3 +351,25 @@ export async function deleteDatabase(
         };
     });
 }
+
+
+export async function findDocumentsById(
+    db: IDBDatabase,
+    storeName: string,
+    docIds: string[]
+): Promise<TestDocument[]> {
+    const tx: IDBTransaction = (db as any)
+        .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
+    const innerStore = tx.objectStore(storeName);
+
+    return Promise.all(
+        docIds.map(docId => {
+            return new Promise<any>(res => {
+                const objectStoreRequest = innerStore.get(docId);
+                objectStoreRequest.onsuccess = function (event) {
+                    res(objectStoreRequest.result);
+                };
+            });
+        })
+    );
+}
