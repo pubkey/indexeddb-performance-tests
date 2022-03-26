@@ -1,13 +1,28 @@
-import { randomString, wait } from 'async-test-util';
-import { getAverageDocument, getShardKey, openDatabase, STORES_BY_DB, TestCase, TestDocument, TRANSACTION_SETTINGS } from './helper';
+import { randomString } from 'async-test-util';
+import {
+    addStoresToExistingDatabase,
+    deleteDatabase,
+    getAverageDocument,
+    getShardKey,
+    insertMany,
+    openDatabase,
+    readAll,
+    TestCase,
+    TestDocument,
+    TRANSACTION_SETTINGS
+} from './helper';
 
 export async function testCaseSharding(): Promise<TestCase> {
     console.log('testCaseSharding() START');
+    const shards = 20;
+    const documents = 50000;
 
-    const testDocuments = new Array(50000)
+    const testDocuments = new Array(documents)
         .fill(0)
         .map(() => getAverageDocument());
-    const shards = 500;
+    const storeNames = new Array(shards)
+        .fill(0)
+        .map(() => randomString(10));
     const docsByShardKey: Map<number, TestDocument[]> = new Map();
     testDocuments.forEach(testDoc => {
         const shardKey = getShardKey(
@@ -30,6 +45,7 @@ export async function testCaseSharding(): Promise<TestCase> {
     let dbA: IDBDatabase;
     let dbB: IDBDatabase;
     let dbsC: IDBDatabase[];
+    let dbD: IDBDatabase;
     testCase['open'] = {
         a: async () => {
             dbA = await openDatabase(
@@ -40,9 +56,7 @@ export async function testCaseSharding(): Promise<TestCase> {
         b: async () => {
             dbB = await openDatabase(
                 randomString(10),
-                new Array(shards)
-                    .fill(0)
-                    .map((_v, idx) => 'shard-' + idx)
+                storeNames
             );
         },
         c: async () => {
@@ -54,6 +68,16 @@ export async function testCaseSharding(): Promise<TestCase> {
                         ['documents']
                     ))
             );
+        },
+        d: async () => {
+            dbD = await openDatabase(
+                randomString(10),
+                []
+            );
+            dbD = await addStoresToExistingDatabase(
+                dbD,
+                storeNames
+            );
         }
     };
 
@@ -62,41 +86,21 @@ export async function testCaseSharding(): Promise<TestCase> {
      */
     testCase['insert'] = {
         a: async () => {
-            const tx: IDBTransaction = (dbA as any)
-                .transaction(['documents'], 'readwrite', TRANSACTION_SETTINGS);
-            const innerStore = tx.objectStore('documents');
-            const callPromises: Promise<any>[] = [];
-            testDocuments.forEach(doc => {
-                const putCall = innerStore.put(doc);
-                callPromises.push(
-                    new Promise<any>(res => {
-                        putCall.onsuccess = () => {
-                            res({});
-                        };
-                    })
-                );
-            });
+            await insertMany(
+                dbA,
+                'documents',
+                testDocuments
+            );
         },
         b: async () => {
-            const stores = STORES_BY_DB.get(dbB);
             await Promise.all(
-                stores.map((store, idx) => {
+                storeNames.map((storeName, idx) => {
                     const docs = docsByShardKey.get(idx);
-                    const tx: IDBTransaction = (dbB as any)
-                        .transaction([store.name], 'readwrite', TRANSACTION_SETTINGS);
-                    const innerStore = tx.objectStore(store.name);
-                    const callPromises: Promise<any>[] = [];
-                    docs.forEach(doc => {
-                        const putCall = innerStore.put(doc);
-                        callPromises.push(
-                            new Promise<any>(res => {
-                                putCall.onsuccess = () => {
-                                    res({});
-                                };
-                            })
-                        );
-                    });
-                    return Promise.all(callPromises);
+                    return insertMany(
+                        dbB,
+                        storeName,
+                        docs
+                    );
                 })
             );
         },
@@ -104,24 +108,26 @@ export async function testCaseSharding(): Promise<TestCase> {
             await Promise.all(
                 dbsC.map((db, idx) => {
                     const docs = docsByShardKey.get(idx);
-                    const tx: IDBTransaction = (db as any)
-                        .transaction(['documents'], 'readwrite', TRANSACTION_SETTINGS);
-                    const innerStore = tx.objectStore('documents');
-                    const callPromises: Promise<any>[] = [];
-                    docs.forEach(doc => {
-                        const putCall = innerStore.put(doc);
-                        callPromises.push(
-                            new Promise<any>(res => {
-                                putCall.onsuccess = () => {
-                                    res({});
-                                };
-                            })
-                        );
-                    });
-                    return Promise.all(callPromises);
+                    return insertMany(
+                        db,
+                        'documents',
+                        docs
+                    );
                 })
             );
-        }
+        },
+        d: async () => {
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    const docs = docsByShardKey.get(idx);
+                    return insertMany(
+                        dbD,
+                        storeName,
+                        docs
+                    );
+                })
+            );
+        },
     };
 
     /**
@@ -129,43 +135,58 @@ export async function testCaseSharding(): Promise<TestCase> {
      */
     testCase['read'] = {
         a: async () => {
-            const tx: IDBTransaction = (dbA as any)
-                .transaction(['documents'], 'readonly', TRANSACTION_SETTINGS);
-            const innerStore = tx.objectStore('documents');
-            return new Promise<any>(res => {
-                innerStore.getAll().onsuccess = function (event) {
-                    res((event as any).target.result);
-                };
-            });
+            return readAll(
+                dbA,
+                'documents'
+            );
         },
         b: async () => {
-            const stores = STORES_BY_DB.get(dbB);
             await Promise.all(
-                stores.map(store => {
-                    const tx: IDBTransaction = (dbB as any)
-                        .transaction([store.name], 'readonly', TRANSACTION_SETTINGS);
-                    const innerStore = tx.objectStore(store.name);
-                    return new Promise<any>(res => {
-                        innerStore.getAll().onsuccess = function (event) {
-                            res((event as any).target.result);
-                        };
-                    });
+                storeNames.map(storeName => {
+                    return readAll(
+                        dbB,
+                        storeName
+                    );
                 })
             );
         },
         c: async () => {
             await Promise.all(
                 dbsC.map(db => {
-                    const tx: IDBTransaction = (db as any)
-                        .transaction(['documents'], 'readonly', TRANSACTION_SETTINGS);
-                    const innerStore = tx.objectStore('documents');
-                    return new Promise<any>(res => {
-                        innerStore.getAll().onsuccess = function (event) {
-                            res((event as any).target.result);
-                        };
-                    });
+                    return readAll(
+                        db,
+                        'documents'
+                    );
                 })
             );
+        },
+        d: async () => {
+            await Promise.all(
+                storeNames.map(storeName => {
+                    return readAll(
+                        dbD,
+                        storeName
+                    );
+                })
+            );
+        },
+    };
+
+
+    testCase['cleanup'] = {
+        a: async () => {
+            return deleteDatabase(dbA);
+        },
+        b: async () => {
+            return deleteDatabase(dbB);
+        },
+        c: async () => {
+            return Promise.all(
+                dbsC.map(db => deleteDatabase(db))
+            );
+        },
+        d: async () => {
+            return deleteDatabase(dbD);
         }
     };
 

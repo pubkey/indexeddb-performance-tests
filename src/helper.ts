@@ -51,13 +51,27 @@ const indexSettings = {
 
 export const TRANSACTION_SETTINGS = { durability: 'relaxed' };
 
-
-export const STORES_BY_DB: WeakMap<IDBDatabase, IDBObjectStore[]> = new WeakMap();
+export const OPEN_STORES_BY_DATABASE_NAME: Map<string, string[]> = new Map();
+export function addToOpenStoresMap(
+    dbName: string,
+    stores: string[]
+) {
+    let ar = OPEN_STORES_BY_DATABASE_NAME.get(dbName);
+    if (!ar) {
+        ar = [];
+        OPEN_STORES_BY_DATABASE_NAME.set(dbName, ar);
+    }
+    stores.forEach(s => ar.push(s));
+}
 
 export function openDatabase(
     name: string,
     stores: string[]
 ): Promise<IDBDatabase> {
+    addToOpenStoresMap(
+        name,
+        stores
+    );
     return new Promise<IDBDatabase>((res, rej) => {
         /**
          * All IndexedDB databases are opened without version
@@ -75,26 +89,89 @@ export function openDatabase(
         openRequest.onupgradeneeded = function () {
             const database = openRequest.result;
 
-            const storesAr = [];
-            STORES_BY_DB.set(database, storesAr);
-            stores.forEach(storeName => {
-                const store = database.createObjectStore(storeName, { keyPath: 'id' });
-                storesAr.push(store);
-
-                store.createIndex(
-                    randomString(10),
-                    [
-                        'bool',
-                        'timestamp',
-                    ],
-                    indexSettings
-                );
+            const openStores = database.objectStoreNames;
+            const mustOpenStores = OPEN_STORES_BY_DATABASE_NAME.get(name);
+            OPEN_STORES_BY_DATABASE_NAME.set(name, []);
+            mustOpenStores.forEach(storeName => {
+                if (!openStores.contains(storeName)) {
+                    const store = database.createObjectStore(storeName, { keyPath: 'id' });
+                    store.createIndex(
+                        randomString(10),
+                        [
+                            'bool',
+                            'timestamp',
+                        ],
+                        indexSettings
+                    );
+                }
             });
-        }
+        };
     });
 }
 
 
+/**
+ * For RxDB, we need to be able to dynamically add/remove stores
+ * after the initial database creation.
+ * @link https://stackoverflow.com/a/59004805/3443137
+ * @link https://www.raymondcamden.com/2012/04/25/How-to-handle-setup-logic-with-indexedDB
+ */
+export async function addStoresToExistingDatabase(
+    database: IDBDatabase,
+    stores: string[]
+): Promise<IDBDatabase> {
+    const name = database.name;
+    addToOpenStoresMap(name, stores);
+    const previousVersion = database.version;
+
+    database.close();
+    return new Promise<IDBDatabase>((res, rej) => {
+        const openRequest = indexedDB.open(name, previousVersion + 1);
+        openRequest.onerror = function (event) {
+            rej(event);
+        };
+        openRequest.onsuccess = function (event) {
+            res(openRequest.result);
+        };
+        openRequest.onblocked = () => {
+            rej('blocked');
+        };
+        openRequest.onupgradeneeded = function () {
+            const newDatabase = openRequest.result;
+            const openStores = newDatabase.objectStoreNames;
+            const mustOpenStores = OPEN_STORES_BY_DATABASE_NAME.get(name);
+            OPEN_STORES_BY_DATABASE_NAME.set(name, []);
+            mustOpenStores.forEach(storeName => {
+                if (!openStores.contains(storeName)) {
+                    const store = newDatabase.createObjectStore(storeName, { keyPath: 'id' });
+                    store.createIndex(
+                        randomString(10),
+                        [
+                            'bool',
+                            'timestamp',
+                        ],
+                        indexSettings
+                    );
+                }
+            });
+        };
+    });
+}
+
+export async function getDatabaseVersion(name: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(name);
+        request.onsuccess = event => {
+            console.dir(event);
+
+            const database = request.result;
+            database.close();
+            resolve(database.version);
+        };
+        request.onerror = event => reject((event as any).target.error);
+        request.onblocked = event => reject(new Error('db is blocked'));
+    });
+}
 
 export type TestCase = {
     [metric: string]: {
@@ -105,32 +182,35 @@ export type TestResult = {
     [metric: string]: {
         [optionKey: string]: number;
     }
-}
+};
 
 export async function runTestCase(
     testCaseFn: () => Promise<TestCase> | TestCase,
     runs: number
 ) {
     let done = 0;
-    let totalResult: TestResult = {};
+    const totalResult: TestResult = {};
+    const sleepInBetween = 1000;
     while (done < runs) {
         done++;
         const testCase = await testCaseFn();
         const result: TestResult = {};
         const metrics = Object.entries(testCase);
         for (const metric of metrics) {
-            await wait(100);
+            await wait(sleepInBetween);
             const metricKey = metric[0];
             result[metricKey] = {};
             const runFns = shuffleArray(Object.entries(metric[1]));
             for (const runFn of runFns) {
                 const optionKey = runFn[0];
+                console.log('run ' + metricKey + ': ' + optionKey);
                 const fn = runFn[1];
-                await wait(100);
+                await wait(sleepInBetween);
                 const startTime = performance.now();
                 await fn();
                 const endTime = performance.now() - startTime;
                 result[metricKey][optionKey] = endTime;
+                result[metricKey] = sortObject(result[metricKey]);
             }
         }
 
@@ -210,4 +290,64 @@ export function sortObject<T>(obj: T): T {
         result[key] = obj[key];
         return result;
     }, {}) as any;
+}
+
+
+export async function insertMany(
+    db: IDBDatabase,
+    storeName: string,
+    documents: TestDocument[]
+): Promise<void> {
+    const tx: IDBTransaction = (db as any)
+        .transaction([storeName], 'readwrite', TRANSACTION_SETTINGS);
+    const store = tx.objectStore(storeName);
+    documents.forEach(doc => {
+        store.put(doc);
+    });
+    if ((tx as any).commit) {
+        (tx as any).commit();
+    }
+    return new Promise((res, rej) => {
+        tx.onerror = err => rej(err);
+        tx.oncomplete = function (event) {
+            res();
+        };
+    });
+}
+
+export async function readAll(
+    db: IDBDatabase,
+    storeName: string
+): Promise<TestDocument[]> {
+    const tx: IDBTransaction = (db as any)
+        .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
+    const innerStore = tx.objectStore(storeName);
+    return new Promise<any>(res => {
+        innerStore.getAll().onsuccess = function (event) {
+            res((event as any).target.result);
+        };
+    });
+}
+
+export async function deleteDatabase(
+    database: IDBDatabase
+): Promise<void> {
+    /**
+     * We first have to close the database
+     * otherwise it cannot be deleted.
+     */
+    database.close();
+
+    await new Promise<void>((res, rej) => {
+        const deleteRequest = indexedDB.deleteDatabase(database.name);
+        deleteRequest.onsuccess = function (event) {
+            res();
+        };
+        deleteRequest.onerror = (ev) => {
+            rej(ev);
+        };
+        deleteRequest.onblocked = function () {
+            rej('Couldn\'t delete database due to the operation being blocked');
+        };
+    });
 }
