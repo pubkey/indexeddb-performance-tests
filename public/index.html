@@ -7,8 +7,30 @@
 </head>
 
 <body>
-
     <script src="bundle.js"></script>
+
+    <p><b>Hint: Open the browser console to see the test ouput.</b></p>
+
+    <div class="test-case">
+        <h4>Create store after database is created</h4>
+        <p>
+            In IndexedDB, new stores can only be added to an existing database
+            inside of the 'onupgradeneeded' handler.
+            But if we want to add stores dynamically, we have to hack around
+            and do a version upgrade.
+            This test ensures that we found a way to dynamically add stores without
+            lossing data.
+            <br /><br />
+            A: Open database and stores directly<br />
+            B: First open database, then add the stores dynamically<br />
+        </p>
+        <button
+            test-case-id="per-store"
+            onclick="window.testCaseDynamicStores()"
+        >Measure</button>
+    </div>
+
+
 
     <div class="test-case">
         <h4>Create one Database per document store</h4>

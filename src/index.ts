@@ -1,6 +1,7 @@
 import { runTestCase } from './helper';
 import { testCasePerStore } from './test-case-per-store';
 import { testCaseSharding } from './test-case-sharding';
+import { testCaseDynamicStores } from './test-dynamic-stores';
 
 (window as any).testCasePerStore = () => {
     runTestCase(
@@ -17,3 +18,13 @@ import { testCaseSharding } from './test-case-sharding';
         10
     );
 };
+
+
+
+(window as any).testCaseDynamicStores = () => {
+    runTestCase(
+        testCaseDynamicStores,
+        20
+    );
+};
+

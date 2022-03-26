@@ -2,6 +2,7 @@ import { randomBoolean, randomNumber, randomString, wait } from 'async-test-util
 
 export type TestDocument = {
     id: string;
+    age: number;
     nr: number;
     timestamp: number;
     nes: {
@@ -21,6 +22,11 @@ export type TestDocument = {
 export function getAverageDocument(): TestDocument {
     return {
         id: randomString(12),
+        /**
+         * The age is normally distributed between 0 and 100.
+         * It can be used to query for a subset of the documents.
+         */
+        age: randomNumber(0, 100),
         nr: randomNumber(0, 1000),
         timestamp: new Date().getTime(),
         nes: {
@@ -46,7 +52,9 @@ const indexSettings = {
      * > If no locale is specified, normal JavaScript sorting will be used — not locale-aware.
      * @link https://developer.mozilla.org/en-US/docs/Web/API/IDBObjectStore/createIndex
      */
-    locale: null
+    locale: null,
+
+    unique: false
 } as any;
 
 export const TRANSACTION_SETTINGS = { durability: 'relaxed' };
@@ -95,18 +103,31 @@ export function openDatabase(
             mustOpenStores.forEach(storeName => {
                 if (!openStores.contains(storeName)) {
                     const store = database.createObjectStore(storeName, { keyPath: 'id' });
-                    store.createIndex(
-                        randomString(10),
-                        [
-                            'bool',
-                            'timestamp',
-                        ],
-                        indexSettings
-                    );
+                    createDefaultIndexes(store);
                 }
             });
         };
     });
+}
+
+export function createDefaultIndexes(
+    store: IDBObjectStore
+) {
+    store.createIndex(
+        'age-index',
+        [
+            'age'
+        ],
+        indexSettings
+    );
+    store.createIndex(
+        randomString(10),
+        [
+            'bool',
+            'timestamp',
+        ],
+        indexSettings
+    );
 }
 
 
@@ -128,13 +149,24 @@ export async function addStoresToExistingDatabase(
     return new Promise<IDBDatabase>((res, rej) => {
         const openRequest = indexedDB.open(name, previousVersion + 1);
         openRequest.onerror = function (event) {
+            console.log('addStoresToExistingDatabase: error');
+            console.dir(event);
             rej(event);
         };
         openRequest.onsuccess = function (event) {
             res(openRequest.result);
         };
-        openRequest.onblocked = () => {
-            rej('blocked');
+
+        /**
+         * This can throw if a transaction was still
+         * running while we upgraded the version.
+         * In that case, we do not have to do anything
+         * because onupgradeneeded will be called later anyway.
+         */
+        openRequest.onblocked = (err) => {
+            console.log('addStoresToExistingDatabase() openRequest: blocked');
+            console.dir(err);
+            // rej('addStoresToExistingDatabase() openRequest: throw blocked');
         };
         openRequest.onupgradeneeded = function () {
             const newDatabase = openRequest.result;
@@ -144,14 +176,7 @@ export async function addStoresToExistingDatabase(
             mustOpenStores.forEach(storeName => {
                 if (!openStores.contains(storeName)) {
                     const store = newDatabase.createObjectStore(storeName, { keyPath: 'id' });
-                    store.createIndex(
-                        randomString(10),
-                        [
-                            'bool',
-                            'timestamp',
-                        ],
-                        indexSettings
-                    );
+                    createDefaultIndexes(store);
                 }
             });
         };
@@ -308,8 +333,13 @@ export async function insertMany(
         (tx as any).commit();
     }
     return new Promise((res, rej) => {
-        tx.onerror = err => rej(err);
+        tx.onerror = err => {
+            // console.log('insertMany error:');
+            // console.dir(err);
+            rej(err);
+        };
         tx.oncomplete = function (event) {
+            // console.log('insertMany complete');
             res();
         };
     });
@@ -372,4 +402,34 @@ export async function findDocumentsById(
             });
         })
     );
+}
+
+
+export async function findViaCursor(
+    db: IDBDatabase,
+    storeName: string,
+    maxAge: number
+): Promise<TestDocument[]> {
+    const result: TestDocument[] = [];
+    console.log('findViaCursor() ' + storeName + ' - ' + maxAge);
+    return new Promise<TestDocument[]>((res, rej) => {
+        const tx: IDBTransaction = (db as any)
+            .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
+        const store = tx.objectStore(storeName);
+
+        const index = store.index('age-index');
+        const range = IDBKeyRange.upperBound([maxAge]);
+        const openCursorRequest = index.openCursor(range, 'next');
+        openCursorRequest.onerror = err => rej(err);
+        openCursorRequest.onsuccess = function (e: any) {
+            const cursor = e.target.result;
+            if (cursor) {
+                result.push(cursor.value);
+                cursor.continue();
+            } else {
+                // Iteration complete
+                res(result);
+            }
+        };
+    });
 }

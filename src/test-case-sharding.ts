@@ -3,6 +3,7 @@ import {
     addStoresToExistingDatabase,
     deleteDatabase,
     findDocumentsById,
+    findViaCursor,
     getAverageDocument,
     getShardKey,
     halfArray,
@@ -16,8 +17,8 @@ import {
 
 export async function testCaseSharding(): Promise<TestCase> {
     console.log('testCaseSharding() START');
-    const shards = 20;
-    const documents = 50000;
+    const shards = 5;
+    const documents = 5000;
 
     const testDocuments = new Array(documents)
         .fill(0)
@@ -178,47 +179,124 @@ export async function testCaseSharding(): Promise<TestCase> {
     /**
      * Read documents by id
      */
-    const halfDocIds: string[] = halfArray(testDocuments).map(d => d.id);
+    const quarterDocIds: string[] = halfArray(halfArray(testDocuments)).map(d => d.id);
+    function getFromHalfDocByShardingKey(shardKey: number) {
+        return quarterDocIds.filter((docId) => {
+            return getShardKey(
+                shards,
+                docId
+            ) === shardKey;
+        });
+    }
     testCase['read-by-id'] = {
         a: async () => {
             return findDocumentsById(
                 dbA,
                 'documents',
-                halfDocIds
+                quarterDocIds
             );
         },
         b: async () => {
             return Promise.all(
-                storeNames.map(storeName => {
+                storeNames.map((storeName, idx) => {
                     return findDocumentsById(
                         dbB,
                         storeName,
-                        halfDocIds
+                        getFromHalfDocByShardingKey(idx)
                     );
                 })
             );
         },
         c: async () => {
             return Promise.all(
-                dbsC.map(db => {
+                dbsC.map((db, idx) => {
                     return findDocumentsById(
                         db,
                         'documents',
-                        halfDocIds
+                        getFromHalfDocByShardingKey(idx)
                     );
                 })
             );
         },
         d: async () => {
             await Promise.all(
-                storeNames.map(storeName => {
+                storeNames.map((storeName, idx) => {
                     return findDocumentsById(
                         dbD,
                         storeName,
-                        halfDocIds
+                        getFromHalfDocByShardingKey(idx)
                     );
                 })
             );
+        }
+    };
+
+
+    const quarterDocsMaxAge = 25;
+    let viaCursorAmount: number;
+    testCase['read-by-cursor'] = {
+        a: async () => {
+            const res = await findViaCursor(
+                dbA,
+                'documents',
+                quarterDocsMaxAge
+            );
+            if (!viaCursorAmount) {
+                viaCursorAmount = res.length;
+            } else if (viaCursorAmount !== res.length) {
+                throw new Error('got wrong amount of documents');
+            }
+        },
+        b: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaCursor(
+                        dbB,
+                        storeName,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            if (!viaCursorAmount) {
+                viaCursorAmount = res.length;
+            } else if (viaCursorAmount !== res.length) {
+                throw new Error('got wrong amount of documents');
+            }
+        },
+        c: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                dbsC.map((db, idx) => {
+                    return findViaCursor(
+                        db,
+                        'documents',
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            if (!viaCursorAmount) {
+                viaCursorAmount = res.length;
+            } else if (viaCursorAmount !== res.length) {
+                throw new Error('got wrong amount of documents');
+            }
+        },
+        d: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaCursor(
+                        dbD,
+                        storeName,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            if (!viaCursorAmount) {
+                viaCursorAmount = res.length;
+            } else if (viaCursorAmount !== res.length) {
+                throw new Error('got wrong amount of documents');
+            }
         }
     };
 
