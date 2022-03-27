@@ -116,12 +116,13 @@ export function createDefaultIndexes(
     store.createIndex(
         'age-index',
         [
-            'age'
+            'age',
+            'id'
         ],
         indexSettings
     );
     store.createIndex(
-        randomString(10),
+        'bool-timestamp',
         [
             'bool',
             'timestamp',
@@ -149,7 +150,6 @@ export async function addStoresToExistingDatabase(
     return new Promise<IDBDatabase>((res, rej) => {
         const openRequest = indexedDB.open(name, previousVersion + 1);
         openRequest.onerror = function (event) {
-            console.log('addStoresToExistingDatabase: error');
             console.dir(event);
             rej(event);
         };
@@ -282,7 +282,7 @@ export function shuffleArray<T>(a: T[]): T[] {
 
 export function halfArray<T>(ar: T[]): T[] {
     const halfLength = Math.ceil(ar.length / 2);
-    const leftSide = ar.splice(0, halfLength);
+    const leftSide = ar.slice(0).splice(0, halfLength);
     return leftSide;
 }
 
@@ -405,20 +405,32 @@ export async function findDocumentsById(
 }
 
 
+const adMe = 0.00000001;
+
 export async function findViaCursor(
     db: IDBDatabase,
     storeName: string,
     maxAge: number
 ): Promise<TestDocument[]> {
     const result: TestDocument[] = [];
-    console.log('findViaCursor() ' + storeName + ' - ' + maxAge);
     return new Promise<TestDocument[]>((res, rej) => {
         const tx: IDBTransaction = (db as any)
             .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
         const store = tx.objectStore(storeName);
 
         const index = store.index('age-index');
-        const range = IDBKeyRange.upperBound([maxAge]);
+        const range = IDBKeyRange.bound(
+            [
+                -Infinity,
+                -Infinity
+            ],
+            [
+                maxAge + adMe,
+                Infinity
+            ],
+            false,
+            false
+        );
         const openCursorRequest = index.openCursor(range, 'next');
         openCursorRequest.onerror = err => rej(err);
         openCursorRequest.onsuccess = function (e: any) {
@@ -432,4 +444,105 @@ export async function findViaCursor(
             }
         };
     });
+}
+
+
+export async function findViaGetAll(
+    db: IDBDatabase,
+    storeName: string,
+    maxAge: number
+): Promise<TestDocument[]> {
+    return new Promise<TestDocument[]>((res, rej) => {
+        const tx: IDBTransaction = (db as any)
+            .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
+        const store = tx.objectStore(storeName);
+        const index = store.index('age-index');
+        const range = IDBKeyRange.bound(
+            [
+                -Infinity,
+                -Infinity
+            ],
+            [
+                maxAge + adMe,
+                Infinity
+            ],
+            false,
+            false
+        );
+        const openCursorRequest = index.getAll(range);
+        openCursorRequest.onerror = err => rej(err);
+        openCursorRequest.onsuccess = function (e: any) {
+            res(e.target.result);
+        };
+    });
+}
+
+/**
+ * @link https://nolanlawson.com/2021/08/22/speeding-up-indexeddb-reads-and-writes/
+ * @link https://gist.github.com/inexorabletash/704e9688f99ac12dd336
+ */
+export async function findViaBatchedCursor(
+    db: IDBDatabase,
+    storeName: string,
+    batchSize: number,
+    maxAge: number
+): Promise<TestDocument[]> {
+    let result: TestDocument[] = [];
+    const tx: IDBTransaction = (db as any)
+        .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
+    const store = tx.objectStore(storeName);
+    const index = store.index('age-index');
+    const maxString = String.fromCharCode(65535);
+
+    let lastDoc: TestDocument | undefined;
+    let done = false;
+    while (done === false) {
+        await new Promise<void>((res, rej) => {
+            const range = IDBKeyRange.bound(
+                [
+                    lastDoc ? lastDoc.age : -Infinity,
+                    lastDoc ? lastDoc.id : -Infinity,
+                ],
+                [
+                    maxAge + adMe,
+                    maxString
+                ],
+                true,
+                false
+            );
+            const openCursorRequest = index.getAll(range, batchSize);
+            openCursorRequest.onerror = err => rej(err);
+            openCursorRequest.onsuccess = e => {
+                const subResult: TestDocument[] = (e as any).target.result;
+                lastDoc = lastOfArray(subResult);
+                if (subResult.length === 0) {
+                    done = true;
+                } else {
+                    result = result.concat(subResult);
+                }
+                res();
+            };
+        });
+    }
+
+    return result;
+}
+
+
+
+export function lastOfArray<T>(ar: T[]): T {
+    return ar[ar.length - 1];
+}
+
+
+export function sortByAgeAndId(a: TestDocument, b: TestDocument): 1 | -1 {
+    if (a.age > b.age) {
+        return 1;
+    } else if (a.age < b.age) {
+        return -1;
+    } else if (a.id > b.id) {
+        return 1;
+    } else {
+        return -1;
+    }
 }

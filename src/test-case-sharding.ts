@@ -3,30 +3,42 @@ import {
     addStoresToExistingDatabase,
     deleteDatabase,
     findDocumentsById,
+    findViaBatchedCursor,
     findViaCursor,
+    findViaGetAll,
     getAverageDocument,
     getShardKey,
     halfArray,
     insertMany,
     openDatabase,
     readAll,
+    sortByAgeAndId,
     TestCase,
-    TestDocument,
-    TRANSACTION_SETTINGS
+    TestDocument
 } from './helper';
 
 export async function testCaseSharding(): Promise<TestCase> {
     console.log('testCaseSharding() START');
-    const shards = 5;
-    const documents = 5000;
+    const shards = 20;
+    const documents = 50000;
 
     const testDocuments = new Array(documents)
         .fill(0)
         .map(() => getAverageDocument());
+    const quarterDocsMaxAge = 25;
+
+    const quarterDocs = testDocuments
+        .filter(d => d.age <= 25)
+        .sort(sortByAgeAndId);
+    console.dir(quarterDocs);
+    const quarterDocsAmount = quarterDocs.length;
+
+
     const storeNames = new Array(shards)
         .fill(0)
         .map(() => randomString(10));
     const docsByShardKey: Map<number, TestDocument[]> = new Map();
+    new Array(shards).fill(0).map((_v, idx) => docsByShardKey.set(idx, []));
     testDocuments.forEach(testDoc => {
         const shardKey = getShardKey(
             shards,
@@ -141,37 +153,53 @@ export async function testCaseSharding(): Promise<TestCase> {
             return readAll(
                 dbA,
                 'documents'
-            );
+            ).then(gotDocs => {
+                if (gotDocs.length !== testDocuments.length) {
+                    throw new Error('docs missing');
+                }
+            });
         },
         b: async () => {
+            let res: TestDocument[] = [];
             await Promise.all(
                 storeNames.map(storeName => {
                     return readAll(
                         dbB,
                         storeName
-                    );
+                    ).then(subRes => res = res.concat(subRes));
                 })
             );
+            if (res.length !== testDocuments.length) {
+                throw new Error('docs missing');
+            }
         },
         c: async () => {
+            let res: TestDocument[] = [];
             await Promise.all(
                 dbsC.map(db => {
                     return readAll(
                         db,
                         'documents'
-                    );
+                    ).then(subRes => res = res.concat(subRes));
                 })
             );
+            if (res.length !== testDocuments.length) {
+                throw new Error('docs missing');
+            }
         },
         d: async () => {
+            let res: TestDocument[] = [];
             await Promise.all(
                 storeNames.map(storeName => {
                     return readAll(
                         dbD,
                         storeName
-                    );
+                    ).then(subRes => res = res.concat(subRes));
                 })
             );
+            if (res.length !== testDocuments.length) {
+                throw new Error('docs missing');
+            }
         },
     };
 
@@ -199,41 +227,80 @@ export async function testCaseSharding(): Promise<TestCase> {
         b: async () => {
             return Promise.all(
                 storeNames.map((storeName, idx) => {
-                    return findDocumentsById(
-                        dbB,
-                        storeName,
-                        getFromHalfDocByShardingKey(idx)
-                    );
+                    const ids = getFromHalfDocByShardingKey(idx);
+                    if (ids.length > 0) {
+                        return findDocumentsById(
+                            dbB,
+                            storeName,
+                            getFromHalfDocByShardingKey(idx)
+                        );
+                    } else {
+                        return [];
+                    }
                 })
             );
         },
         c: async () => {
             return Promise.all(
                 dbsC.map((db, idx) => {
-                    return findDocumentsById(
-                        db,
-                        'documents',
-                        getFromHalfDocByShardingKey(idx)
-                    );
+                    const ids = getFromHalfDocByShardingKey(idx);
+                    if (ids.length > 0) {
+                        return findDocumentsById(
+                            db,
+                            'documents',
+                            getFromHalfDocByShardingKey(idx)
+                        );
+                    } else {
+                        return [];
+                    }
                 })
             );
         },
         d: async () => {
             await Promise.all(
                 storeNames.map((storeName, idx) => {
-                    return findDocumentsById(
-                        dbD,
-                        storeName,
-                        getFromHalfDocByShardingKey(idx)
-                    );
+                    const ids = getFromHalfDocByShardingKey(idx);
+                    if (ids.length > 0) {
+                        return findDocumentsById(
+                            dbD,
+                            storeName,
+                            getFromHalfDocByShardingKey(idx)
+                        );
+                    } else {
+                        return [];
+                    }
                 })
             );
         }
     };
 
 
-    const quarterDocsMaxAge = 25;
-    let viaCursorAmount: number;
+    function ensureResultIsCorrect(result: TestDocument[]) {
+        return;
+        const sorted = result.sort(sortByAgeAndId);
+        quarterDocs.forEach((doc, idx) => {
+            const isDoc = sorted[idx];
+            if (!isDoc || doc.id !== isDoc.id) {
+                console.dir({
+                    idx,
+                    quarterDocs,
+                    sorted,
+                    doc,
+                    isDoc
+                });
+                throw new Error('result mismatch');
+            }
+        });
+
+        if (result.length !== quarterDocs.length) {
+            console.dir({
+                quarterDocs,
+                sorted
+            });
+            throw new Error('not same length');
+        }
+    }
+
     testCase['read-by-cursor'] = {
         a: async () => {
             const res = await findViaCursor(
@@ -241,11 +308,7 @@ export async function testCaseSharding(): Promise<TestCase> {
                 'documents',
                 quarterDocsMaxAge
             );
-            if (!viaCursorAmount) {
-                viaCursorAmount = res.length;
-            } else if (viaCursorAmount !== res.length) {
-                throw new Error('got wrong amount of documents');
-            }
+            ensureResultIsCorrect(res);
         },
         b: async () => {
             let res: TestDocument[] = [];
@@ -258,11 +321,7 @@ export async function testCaseSharding(): Promise<TestCase> {
                     ).then(subRes => res = res.concat(subRes));
                 })
             );
-            if (!viaCursorAmount) {
-                viaCursorAmount = res.length;
-            } else if (viaCursorAmount !== res.length) {
-                throw new Error('got wrong amount of documents');
-            }
+            ensureResultIsCorrect(res);
         },
         c: async () => {
             let res: TestDocument[] = [];
@@ -275,11 +334,7 @@ export async function testCaseSharding(): Promise<TestCase> {
                     ).then(subRes => res = res.concat(subRes));
                 })
             );
-            if (!viaCursorAmount) {
-                viaCursorAmount = res.length;
-            } else if (viaCursorAmount !== res.length) {
-                throw new Error('got wrong amount of documents');
-            }
+            ensureResultIsCorrect(res);
         },
         d: async () => {
             let res: TestDocument[] = [];
@@ -292,14 +347,118 @@ export async function testCaseSharding(): Promise<TestCase> {
                     ).then(subRes => res = res.concat(subRes));
                 })
             );
-            if (!viaCursorAmount) {
-                viaCursorAmount = res.length;
-            } else if (viaCursorAmount !== res.length) {
-                throw new Error('got wrong amount of documents');
-            }
+            ensureResultIsCorrect(res);
         }
     };
 
+
+    const batchSize = 100;
+    testCase['read-by-batched-cursor'] = {
+        a: async () => {
+            const res = await findViaBatchedCursor(
+                dbA,
+                'documents',
+                batchSize,
+                quarterDocsMaxAge
+            );
+            ensureResultIsCorrect(res);
+        },
+        b: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaBatchedCursor(
+                        dbB,
+                        storeName,
+                        batchSize,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        },
+        c: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                dbsC.map((db, idx) => {
+                    return findViaBatchedCursor(
+                        db,
+                        'documents',
+                        batchSize,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        },
+        d: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaBatchedCursor(
+                        dbD,
+                        storeName,
+                        batchSize,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        }
+    };
+
+
+    testCase['read-by-get-all'] = {
+        a: async () => {
+            const res = await findViaGetAll(
+                dbA,
+                'documents',
+                quarterDocsMaxAge
+            );
+            if (quarterDocsAmount !== res.length) {
+                throw new Error('got wrong amount of documents');
+            }
+        },
+        b: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaGetAll(
+                        dbB,
+                        storeName,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        },
+        c: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                dbsC.map((db, idx) => {
+                    return findViaGetAll(
+                        db,
+                        'documents',
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        },
+        d: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaGetAll(
+                        dbD,
+                        storeName,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        }
+    };
 
     testCase['cleanup'] = {
         a: async () => {
