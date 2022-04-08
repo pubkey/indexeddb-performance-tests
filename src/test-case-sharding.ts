@@ -4,6 +4,7 @@ import {
     deleteDatabase,
     findDocumentsById,
     findViaBatchedCursor,
+    findViaBatchedCursorCustomIndex,
     findViaCursor,
     findViaGetAll,
     getAverageDocument,
@@ -19,8 +20,8 @@ import {
 
 export async function testCaseSharding(): Promise<TestCase> {
     console.log('testCaseSharding() START');
-    const shards = 20;
-    const documents = 50000;
+    const shards = 10;
+    const documents = 40000;
 
     const testDocuments = new Array(documents)
         .fill(0)
@@ -53,6 +54,7 @@ export async function testCaseSharding(): Promise<TestCase> {
     });
 
     const testCase: TestCase = {};
+    const testCaseCommentedOut: TestCase = {};
 
     /**
      * Open databases
@@ -148,7 +150,7 @@ export async function testCaseSharding(): Promise<TestCase> {
     /**
      * Read documents
      */
-    testCase['read'] = {
+    testCaseCommentedOut['read'] = {
         a: async () => {
             return readAll(
                 dbA,
@@ -216,7 +218,7 @@ export async function testCaseSharding(): Promise<TestCase> {
             ) === shardKey;
         });
     }
-    testCase['read-by-id'] = {
+    testCaseCommentedOut['read-by-id'] = {
         a: async () => {
             return findDocumentsById(
                 dbA,
@@ -352,10 +354,73 @@ export async function testCaseSharding(): Promise<TestCase> {
     };
 
 
-    const batchSize = 100;
-    testCase['read-by-batched-cursor'] = {
+    const batchSize = 10;
+    [
+        batchSize * 1,
+        batchSize * 2,
+        batchSize * 3,
+        batchSize * 4,
+        batchSize * 5,
+        batchSize * 1000
+    ].forEach(size => {
+        testCase['read-by-batched-cursor-' + size] = {
+            a: async () => {
+                const res = await findViaBatchedCursor(
+                    dbA,
+                    'documents',
+                    size,
+                    quarterDocsMaxAge
+                );
+                ensureResultIsCorrect(res);
+            },
+            b: async () => {
+                let res: TestDocument[] = [];
+                await Promise.all(
+                    storeNames.map((storeName, idx) => {
+                        return findViaBatchedCursor(
+                            dbB,
+                            storeName,
+                            size,
+                            quarterDocsMaxAge
+                        ).then(subRes => res = res.concat(subRes));
+                    })
+                );
+                ensureResultIsCorrect(res);
+            },
+            c: async () => {
+                let res: TestDocument[] = [];
+                await Promise.all(
+                    dbsC.map((db, idx) => {
+                        return findViaBatchedCursor(
+                            db,
+                            'documents',
+                            size,
+                            quarterDocsMaxAge
+                        ).then(subRes => res = res.concat(subRes));
+                    })
+                );
+                ensureResultIsCorrect(res);
+            },
+            d: async () => {
+                let res: TestDocument[] = [];
+                await Promise.all(
+                    storeNames.map((storeName, idx) => {
+                        return findViaBatchedCursor(
+                            dbD,
+                            storeName,
+                            size,
+                            quarterDocsMaxAge
+                        ).then(subRes => res = res.concat(subRes));
+                    })
+                );
+                ensureResultIsCorrect(res);
+            }
+        };
+    });
+
+    testCaseCommentedOut['read-by-batched-cursor-custom-index'] = {
         a: async () => {
-            const res = await findViaBatchedCursor(
+            const res = await findViaBatchedCursorCustomIndex(
                 dbA,
                 'documents',
                 batchSize,
@@ -367,7 +432,7 @@ export async function testCaseSharding(): Promise<TestCase> {
             let res: TestDocument[] = [];
             await Promise.all(
                 storeNames.map((storeName, idx) => {
-                    return findViaBatchedCursor(
+                    return findViaBatchedCursorCustomIndex(
                         dbB,
                         storeName,
                         batchSize,
@@ -381,7 +446,7 @@ export async function testCaseSharding(): Promise<TestCase> {
             let res: TestDocument[] = [];
             await Promise.all(
                 dbsC.map((db, idx) => {
-                    return findViaBatchedCursor(
+                    return findViaBatchedCursorCustomIndex(
                         db,
                         'documents',
                         batchSize,
@@ -395,7 +460,7 @@ export async function testCaseSharding(): Promise<TestCase> {
             let res: TestDocument[] = [];
             await Promise.all(
                 storeNames.map((storeName, idx) => {
-                    return findViaBatchedCursor(
+                    return findViaBatchedCursorCustomIndex(
                         dbD,
                         storeName,
                         batchSize,

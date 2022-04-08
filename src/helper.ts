@@ -3,6 +3,7 @@ import { randomBoolean, randomNumber, randomString, wait } from 'async-test-util
 export type TestDocument = {
     id: string;
     age: number;
+    ageStringifiedCustomIndex: string;
     nr: number;
     timestamp: number;
     nes: {
@@ -20,14 +21,23 @@ export type TestDocument = {
     }[];
 };
 export function getAverageDocument(): TestDocument {
+    const age = randomNumber(0, 100);
+    const ageStr = age + '';
+    const id = randomString(12);
     return {
-        id: randomString(12),
+        id,
         /**
          * The age is normally distributed between 0 and 100.
          * It can be used to query for a subset of the documents.
          */
-        age: randomNumber(0, 100),
+        age: age,
+        /**
+         * Instead of using IndexedDB compound indexes,
+         * we can try crafting a custom string to use as iterable index.
+         */
+        ageStringifiedCustomIndex: ageStr.padStart(3, '0') + '|' + id,
         nr: randomNumber(0, 1000),
+
         timestamp: new Date().getTime(),
         nes: {
             ted: {
@@ -119,6 +129,11 @@ export function createDefaultIndexes(
             'age',
             'id'
         ],
+        indexSettings
+    );
+    store.createIndex(
+        'custom-age-index',
+        'ageStringifiedCustomIndex',
         indexSettings
     );
     store.createIndex(
@@ -214,7 +229,7 @@ export async function runTestCase(
     runs: number
 ) {
     let done = 0;
-    const totalResult: TestResult = {};
+    const totalResult: any = {};
     const sleepInBetween = 1000;
     while (done < runs) {
         done++;
@@ -242,12 +257,15 @@ export async function runTestCase(
         // sum up results
         Object.entries(result).forEach(([metricKey, metric]) => {
             if (!totalResult[metricKey]) {
-                totalResult[metricKey] = metric;
-            } else {
-                Object.entries(metric).forEach(([optionKey, timeValue]) => {
-                    totalResult[metricKey][optionKey] = totalResult[metricKey][optionKey] + timeValue;
-                });
+                totalResult[metricKey] = {};
             }
+            Object.entries(metric).forEach(([optionKey, timeValue]) => {
+                if (!totalResult[metricKey][optionKey]) {
+                    totalResult[metricKey][optionKey] = [];
+                }
+                console.dir(totalResult);
+                totalResult[metricKey][optionKey].push(timeValue);
+            });
         });
         console.log(JSON.stringify(result, null, 4));
     }
@@ -255,7 +273,17 @@ export async function runTestCase(
     // calculate average
     Object.entries(totalResult).forEach(([metricKey, metric]) => {
         Object.entries(metric).forEach(([optionKey]) => {
-            totalResult[metricKey][optionKey] = Math.ceil(totalResult[metricKey][optionKey] / runs);
+            const values: number[] = totalResult[metricKey][optionKey].sort((a, b) => a - b);
+
+            /**
+             * Remove lowest 10%
+             * because browser can sometimes stuck when other tabs do things.
+             */
+            const tenPercent = Math.ceil(values.length / 10);
+            const use = values.slice(0, values.length - tenPercent);
+            const average = Math.ceil(sumOfArray(use) / use.length);
+
+            totalResult[metricKey][optionKey] = average;
         });
         totalResult[metricKey] = sortObject(metric);
     });
@@ -266,6 +294,13 @@ export async function runTestCase(
 
 }
 
+
+export function sumOfArray(ar: number[]): number {
+    const sum = ar.reduce((a, b) => {
+        return a + b;
+    });
+    return sum;
+}
 
 /**
  * Shuffles array in place.
@@ -528,6 +563,49 @@ export async function findViaBatchedCursor(
     return result;
 }
 
+export async function findViaBatchedCursorCustomIndex(
+    db: IDBDatabase,
+    storeName: string,
+    batchSize: number,
+    maxAge: number
+): Promise<TestDocument[]> {
+    let result: TestDocument[] = [];
+    const tx: IDBTransaction = (db as any)
+        .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
+    const store = tx.objectStore(storeName);
+    const index = store.index('custom-age-index');
+
+
+    const maxAgePlusOne = maxAge + 1;
+    const maxAgeStr = ('' + maxAgePlusOne).padStart(3, '0');
+
+    let lastDoc: TestDocument | undefined;
+    let done = false;
+    while (done === false) {
+        await new Promise<void>((res, rej) => {
+            const range = IDBKeyRange.bound(
+                lastDoc ? lastDoc.ageStringifiedCustomIndex : -Infinity,
+                maxAgeStr,
+                true,
+                false
+            );
+            const openCursorRequest = index.getAll(range, batchSize);
+            openCursorRequest.onerror = err => rej(err);
+            openCursorRequest.onsuccess = e => {
+                const subResult: TestDocument[] = (e as any).target.result;
+                lastDoc = lastOfArray(subResult);
+                if (subResult.length === 0) {
+                    done = true;
+                } else {
+                    result = result.concat(subResult);
+                }
+                res();
+            };
+        });
+    }
+
+    return result;
+}
 
 
 export function lastOfArray<T>(ar: T[]): T {

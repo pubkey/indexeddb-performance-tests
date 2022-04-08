@@ -11,16 +11,6 @@ import { testCaseDynamicStores } from './test-dynamic-stores';
 };
 
 
-
-(window as any).testCaseSharding = () => {
-    runTestCase(
-        testCaseSharding,
-        10
-    );
-};
-
-
-
 (window as any).testCaseDynamicStores = () => {
     runTestCase(
         testCaseDynamicStores,
@@ -28,3 +18,10 @@ import { testCaseDynamicStores } from './test-dynamic-stores';
     );
 };
 
+
+(window as any).testCaseSharding = () => {
+    runTestCase(
+        testCaseSharding,
+        30
+    );
+};
