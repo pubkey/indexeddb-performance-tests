@@ -22,6 +22,6 @@ import { testCaseDynamicStores } from './test-dynamic-stores';
 (window as any).testCaseSharding = () => {
     runTestCase(
         testCaseSharding,
-        30
+        20
     );
 };

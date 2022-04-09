@@ -37,6 +37,8 @@ export async function testCasePerStore(): Promise<TestCase> {
     let dbA: IDBDatabase;
     let dbsB: IDBDatabase[];
     let dbC: IDBDatabase;
+    const dbNameD = randomString(10);
+    let dbsD: IDBDatabase[];
     testCase['open'] = {
         a: async () => {
             dbA = await openDatabase(
@@ -61,6 +63,15 @@ export async function testCasePerStore(): Promise<TestCase> {
             dbC = await addStoresToExistingDatabase(
                 dbC,
                 storeNames
+            );
+        },
+        d: async () => {
+            dbsD = await Promise.all(
+                storeNames
+                    .map(storeName => openDatabase(
+                        dbNameD,
+                        [storeName]
+                    ))
             );
         }
     };
@@ -96,6 +107,17 @@ export async function testCasePerStore(): Promise<TestCase> {
                 storeNames.map(storeName => {
                     return insertMany(
                         dbC,
+                        storeName,
+                        testDocuments
+                    );
+                })
+            );
+        },
+        d: async () => {
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return insertMany(
+                        dbsD[idx],
                         storeName,
                         testDocuments
                     );
@@ -145,6 +167,16 @@ export async function testCasePerStore(): Promise<TestCase> {
                 })
             );
         },
+        d: async () => {
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return readAll(
+                        dbsD[idx],
+                        storeName
+                    );
+                })
+            );
+        },
     };
 
     /**
@@ -185,6 +217,17 @@ export async function testCasePerStore(): Promise<TestCase> {
                 })
             );
         },
+        d: async () => {
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findDocumentsById(
+                        dbsD[idx],
+                        storeName,
+                        halfDocIds
+                    );
+                })
+            );
+        },
     };
 
     testCase['cleanup'] = {
@@ -198,6 +241,11 @@ export async function testCasePerStore(): Promise<TestCase> {
         },
         c: async () => {
             return deleteDatabase(dbC);
+        },
+        d: async () => {
+            return Promise.all(
+                dbsD.map(db => deleteDatabase(db))
+            );
         }
     };
 

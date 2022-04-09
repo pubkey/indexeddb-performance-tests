@@ -63,6 +63,8 @@ export async function testCaseSharding(): Promise<TestCase> {
     let dbB: IDBDatabase;
     let dbsC: IDBDatabase[];
     let dbD: IDBDatabase;
+    const dbNameE = randomString(10);
+    let dbsE: IDBDatabase[];
     testCase['open'] = {
         a: async () => {
             dbA = await openDatabase(
@@ -95,7 +97,15 @@ export async function testCaseSharding(): Promise<TestCase> {
                 dbD,
                 storeNames
             );
-        }
+        },
+        e: async () => {
+            dbsE = await Promise.all(
+                storeNames.map((storeName) => openDatabase(
+                    dbNameE,
+                    [storeName]
+                ))
+            );
+        },
     };
 
     /**
@@ -139,6 +149,18 @@ export async function testCaseSharding(): Promise<TestCase> {
                     const docs = docsByShardKey.get(idx);
                     return insertMany(
                         dbD,
+                        storeName,
+                        docs
+                    );
+                })
+            );
+        },
+        e: async () => {
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    const docs = docsByShardKey.get(idx);
+                    return insertMany(
+                        dbsE[idx],
                         storeName,
                         docs
                     );
@@ -195,6 +217,20 @@ export async function testCaseSharding(): Promise<TestCase> {
                 storeNames.map(storeName => {
                     return readAll(
                         dbD,
+                        storeName
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            if (res.length !== testDocuments.length) {
+                throw new Error('docs missing');
+            }
+        },
+        e: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return readAll(
+                        dbsE[idx],
                         storeName
                     ).then(subRes => res = res.concat(subRes));
                 })
@@ -273,7 +309,23 @@ export async function testCaseSharding(): Promise<TestCase> {
                     }
                 })
             );
-        }
+        },
+        e: async () => {
+            return Promise.all(
+                storeNames.map((storeName, idx) => {
+                    const ids = getFromHalfDocByShardingKey(idx);
+                    if (ids.length > 0) {
+                        return findDocumentsById(
+                            dbsE[idx],
+                            storeName,
+                            getFromHalfDocByShardingKey(idx)
+                        );
+                    } else {
+                        return [];
+                    }
+                })
+            );
+        },
     };
 
 
@@ -350,16 +402,29 @@ export async function testCaseSharding(): Promise<TestCase> {
                 })
             );
             ensureResultIsCorrect(res);
-        }
+        },
+        e: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaCursor(
+                        dbsE[idx],
+                        storeName,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        },
     };
 
 
     const batchSize = 10;
     [
         batchSize * 1,
-        batchSize * 2,
-        batchSize * 3,
-        batchSize * 4,
+        //batchSize * 2,
+        //batchSize * 3,
+        //batchSize * 4,
         batchSize * 5,
         batchSize * 1000
     ].forEach(size => {
@@ -414,7 +479,21 @@ export async function testCaseSharding(): Promise<TestCase> {
                     })
                 );
                 ensureResultIsCorrect(res);
-            }
+            },
+            e: async () => {
+                let res: TestDocument[] = [];
+                await Promise.all(
+                    storeNames.map((storeName, idx) => {
+                        return findViaBatchedCursor(
+                            dbsE[idx],
+                            storeName,
+                            size,
+                            quarterDocsMaxAge
+                        ).then(subRes => res = res.concat(subRes));
+                    })
+                );
+                ensureResultIsCorrect(res);
+            },
         };
     });
 
@@ -462,6 +541,20 @@ export async function testCaseSharding(): Promise<TestCase> {
                 storeNames.map((storeName, idx) => {
                     return findViaBatchedCursorCustomIndex(
                         dbD,
+                        storeName,
+                        batchSize,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        },
+        e: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaBatchedCursorCustomIndex(
+                        dbsE[idx],
                         storeName,
                         batchSize,
                         quarterDocsMaxAge
@@ -522,7 +615,20 @@ export async function testCaseSharding(): Promise<TestCase> {
                 })
             );
             ensureResultIsCorrect(res);
-        }
+        },
+        e: async () => {
+            let res: TestDocument[] = [];
+            await Promise.all(
+                storeNames.map((storeName, idx) => {
+                    return findViaGetAll(
+                        dbsE[idx],
+                        storeName,
+                        quarterDocsMaxAge
+                    ).then(subRes => res = res.concat(subRes));
+                })
+            );
+            ensureResultIsCorrect(res);
+        },
     };
 
     testCase['cleanup'] = {
@@ -539,6 +645,11 @@ export async function testCaseSharding(): Promise<TestCase> {
         },
         d: async () => {
             return deleteDatabase(dbD);
+        },
+        e: async () => {
+            return Promise.all(
+                dbsE.map(db => deleteDatabase(db))
+            );
         }
     };
 
