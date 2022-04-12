@@ -8,3 +8,5 @@ npm run start
 
 //> open http://localhost:3000/
 ```
+
+Follow up: https://rxdb.info/slow-indexeddb.html
