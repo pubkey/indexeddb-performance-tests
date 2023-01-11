@@ -70,7 +70,21 @@
         >Measure</button>
     </div>
 
-
+    <div class="test-case">
+        <h4>Sorted Read Write</h4>
+        <h5>(NOTICE: Has been proven to not be faster)</h5>
+        <p>
+            Insert of inserting document in a random order, we sort them before.
+            Same goes for by-id reads.
+            <br /><br />
+            A: Insert/Read without sorting<br />
+            B: Insert/Read with sorting<br />
+        </p>
+        <button
+            test-case-id="per-store"
+            onclick="window.testCaseSortedReadWrite()"
+        >Measure</button>
+    </div>
 
 </body>
 

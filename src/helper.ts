@@ -55,6 +55,10 @@ export function getAverageDocument(): TestDocument {
     }
 }
 
+export function sortDocsById(docs: TestDocument[]): TestDocument[] {
+    return docs.sort((a, b) => (a.id > b.id) ? 1 : -1);
+}
+
 const indexSettings = {
     /**
      * We set local to null to ensure we have the same sorting as
@@ -230,7 +234,7 @@ export async function runTestCase(
 ) {
     let done = 0;
     const totalResult: any = {};
-    const sleepInBetween = 1000;
+    const sleepInBetween = 400;
     while (done < runs) {
         done++;
         const testCase = await testCaseFn();
@@ -276,11 +280,12 @@ export async function runTestCase(
             const values: number[] = totalResult[metricKey][optionKey].sort((a, b) => a - b);
 
             /**
-             * Remove lowest 10%
+             * Remove lowest X percent
              * because browser can sometimes stuck when other tabs do things.
              */
-            const tenPercent = Math.ceil(values.length / 10);
+            const tenPercent = Math.ceil(values.length / 90);
             const use = values.slice(0, values.length - tenPercent);
+            totalResult.use = use;
             const average = Math.ceil(sumOfArray(use) / use.length);
 
             totalResult[metricKey][optionKey] = average;
@@ -361,19 +366,16 @@ export async function insertMany(
     const tx: IDBTransaction = (db as any)
         .transaction([storeName], 'readwrite', TRANSACTION_SETTINGS);
     const store = tx.objectStore(storeName);
+    let lastPut: IDBRequest<any>;
     documents.forEach(doc => {
-        store.put(doc);
+        lastPut = store.put(doc);
     });
     if ((tx as any).commit) {
         (tx as any).commit();
     }
     return new Promise((res, rej) => {
-        tx.onerror = err => {
-            // console.log('insertMany error:');
-            // console.dir(err);
-            rej(err);
-        };
-        tx.oncomplete = function (event) {
+        lastPut.onerror = rej;
+        lastPut.onsuccess = function (event) {
             // console.log('insertMany complete');
             res();
         };
@@ -427,16 +429,26 @@ export async function findDocumentsById(
         .transaction([storeName], 'readonly', TRANSACTION_SETTINGS);
     const innerStore = tx.objectStore(storeName);
 
-    return Promise.all(
-        docIds.map(docId => {
-            return new Promise<any>(res => {
-                const objectStoreRequest = innerStore.get(docId);
-                objectStoreRequest.onsuccess = function (event) {
-                    res(objectStoreRequest.result);
-                };
-            });
+    const result: TestDocument[] = [];
+    return new Promise<TestDocument[]>((res, rej) => {
+        /**
+         * Creating many promises is cpu expensive,
+         * so we use a plain counter to check if all
+         * reads-by-id have been finshed.
+         */
+        let notFinished = docIds.length;
+        docIds.forEach(docId => {
+            const objectStoreRequest = innerStore.get(docId);
+            objectStoreRequest.onerror = rej;
+            objectStoreRequest.onsuccess = (event) => {
+                result.push(objectStoreRequest.result);
+                notFinished = notFinished - 1;
+                if (notFinished === 0) {
+                    res(result);
+                }
+            };
         })
-    );
+    });
 }
 
 
